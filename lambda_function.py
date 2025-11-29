@@ -3,24 +3,41 @@ import os
 import logging
 from pathlib import Path
 
-from nlp.preprocessor import detect_language
-from nlp.similarity import CorpusMatcher
-from nlp.sentiment import SentimentAnalyzer
-from nlp.speech import SpeechProcessor
-from nlp.corpus_loader import CorpusLoader
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 SUPPORTED_LANGS = {'pt', 'en'}
 
-corpus_text = Path('/var/task/data/corpus.txt').read_text()
-matcher = CorpusMatcher(corpus_text)
-sentiment_analyzer = SentimentAnalyzer()
-speech_processor = SpeechProcessor()
-
+_matcher = None
+_sentiment_analyzer = None
+_speech_processor = None
 _summarizer = None
+
+
+def get_matcher():
+    global _matcher
+    if _matcher is None:
+        from nlp.similarity import CorpusMatcher
+        corpus_text = Path('/var/task/data/corpus.txt').read_text()
+        _matcher = CorpusMatcher(corpus_text)
+    return _matcher
+
+
+def get_sentiment_analyzer():
+    global _sentiment_analyzer
+    if _sentiment_analyzer is None:
+        from nlp.sentiment import SentimentAnalyzer
+        _sentiment_analyzer = SentimentAnalyzer()
+    return _sentiment_analyzer
+
+
+def get_speech_processor():
+    global _speech_processor
+    if _speech_processor is None:
+        from nlp.speech import SpeechProcessor
+        _speech_processor = SpeechProcessor()
+    return _speech_processor
 
 
 def get_summarizer():
@@ -58,6 +75,8 @@ def lambda_handler(event, context):
 
 
 def process_text(text: str) -> str:
+    from nlp.preprocessor import detect_language
+    
     lang = detect_language(text)
     
     if lang not in SUPPORTED_LANGS:
@@ -66,12 +85,14 @@ def process_text(text: str) -> str:
     if text.startswith('/'):
         return handle_command(text, lang)
     
+    sentiment_analyzer = get_sentiment_analyzer()
     sentiment = sentiment_analyzer.analyze(text)
     prefix = sentiment_analyzer.get_empathetic_prefix(sentiment['label'])
     
     if sentiment_analyzer.should_intervene(text):
         prefix = "Percebo que você pode estar passando por dificuldades. "
     
+    matcher = get_matcher()
     best_match, score = matcher.find_best_match(text)
     
     if best_match:
@@ -93,6 +114,7 @@ def process_voice(message: dict) -> str:
     if not file_url:
         return "Erro ao obter arquivo de áudio."
     
+    speech_processor = get_speech_processor()
     text = speech_processor.process_telegram_voice(file_url)
     
     if text.startswith('['):  # Erro
@@ -105,6 +127,8 @@ def process_voice(message: dict) -> str:
 def handle_command(text: str, lang: str) -> str:
     cmd = text.split()[0].lower()
     args = text[len(cmd):].strip()
+    
+    sentiment_analyzer = get_sentiment_analyzer()
     
     commands = {
         '/start': lambda: get_welcome_message(lang),
@@ -142,10 +166,12 @@ def summarize_text(text: str) -> str:
 
 
 def load_wiki_corpus(topic: str, lang: str) -> str:
-    global matcher
+    global _matcher
     try:
+        from nlp.corpus_loader import CorpusLoader
+        from nlp.similarity import CorpusMatcher
         text = CorpusLoader.from_wikipedia(topic, lang)
-        matcher = CorpusMatcher(text)
+        _matcher = CorpusMatcher(text)
         return f"✅ Corpus atualizado com artigo: {topic}"
     except Exception as e:
         return f"❌ Erro ao carregar Wikipedia: {e}"
